@@ -4,6 +4,16 @@
 , autoconf-archive
 , autoreconfHook
 , aws-sdk-cpp
+, aws-crt-cpp
+, aws-c-auth
+, aws-c-cal
+, aws-c-common
+, aws-c-compression
+, aws-c-event-stream
+, aws-c-http
+, aws-c-io
+, aws-c-mqtt
+, aws-c-s3
 , boehmgc
 , nlohmann_json
 , bison
@@ -25,6 +35,8 @@
 , libseccomp
 , libsodium
 , lowdown
+, pkgs
+, newScope
 , mdbook
 , mdbook-linkcheck
 , mercurial
@@ -225,13 +237,39 @@ in {
     lowdown
   ] ++ lib.optional stdenv.isLinux libseccomp
     ++ lib.optional stdenv.hostPlatform.isx86_64 libcpuid
-    # There have been issues building these dependencies
-    ++ lib.optional (stdenv.hostPlatform == stdenv.buildPlatform && (stdenv.isLinux || stdenv.isDarwin))
-      (aws-sdk-cpp.override {
-        apis = ["s3" "transfer"];
-        customMemoryManagement = false;
-      })
-  ;
+      let
+        packagesNoS2N = self: ({
+            inherit (pkgs) AudioToolbox CoreAudio Security;
+            aws-sdk-cpp = self.callPackage aws-sdk-cpp.override {
+              customMemoryManagement = false;
+              apis = [ "s3" "transfer" ];
+            };
+          }
+          //
+          (
+            lib.mapAttrs
+            (n: pkg: (self.callPackage pkg.override { }).overrideAttrs (old: {
+              cmakeFlags = old.cmakeFlags
+                ++ [ "-DBYO_CRYPTO=ON" ];
+            }))
+            {
+              inherit
+                aws-crt-cpp
+                aws-c-auth
+                aws-c-cal
+                aws-c-common
+                aws-c-compression
+                aws-c-event-stream
+                aws-c-http
+                aws-c-io
+                aws-c-mqtt
+                aws-c-s3;
+            }
+          ));
+        scope = lib.makeScope newScope packagesNoS2N;
+      in
+        [ scope.aws-sdk-cpp ]
+    );
 
   propagatedBuildInputs = [
     boehmgc
@@ -343,6 +381,13 @@ in {
   # built Nix.
   preInstallCheck = lib.optionalString (! doBuild) ''
     mkdir -p src/nix-channel
+  '';
+
+  postInstallCheck = ''
+    if ldd $out/bin/nix | grep -q s2n.so; then
+      echo "result binary depend on s2n-tls";
+      exit 1;
+    fi
   '';
 
   separateDebugInfo = !stdenv.hostPlatform.isStatic;
